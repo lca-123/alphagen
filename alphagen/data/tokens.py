@@ -1,7 +1,7 @@
 from enum import IntEnum
 from typing import Type
 from alphagen_qlib.stock_data import FeatureType
-from alphagen.data.expression import Operator, Expression
+from alphagen.data.expression import Operator
 
 
 class SequenceIndicatorType(IntEnum):
@@ -47,13 +47,6 @@ class SequenceIndicatorToken(Token):
         self.indicator = indicator
 
     def __str__(self): return self.indicator.name
-
-
-class ExpressionToken(Token):
-    def __init__(self, expr: Expression) -> None:
-        self.expression = expr
-
-    def __str__(self): return str(self.expression)
 
 
 BEG_TOKEN = SequenceIndicatorToken(SequenceIndicatorType.BEG)

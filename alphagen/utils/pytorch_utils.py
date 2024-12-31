@@ -1,6 +1,6 @@
 from typing import Tuple, Optional
 import torch
-from torch import Tensor
+from torch import nn, Tensor
 
 
 def masked_mean_std(
@@ -10,7 +10,7 @@ def masked_mean_std(
 ) -> Tuple[Tensor, Tensor]:
     """
     `x`: [days, stocks], input data
-    `n`: [days], should be `(~mask).sum(dim=1)`, provide this to avoid unnecessary computations
+    `n`: [days], should be `(~mask).sum(dim=1)`, provide this to avoid necessary computations
     `mask`: [days, stocks], data masked as `True` will not participate in the computation, \
     defaults to `torch.isnan(x)`
     """
@@ -26,7 +26,6 @@ def masked_mean_std(
 
 
 def normalize_by_day(value: Tensor) -> Tensor:
-    "The shape of the input and the output is (days, stocks)"
     mean, std = masked_mean_std(value)
     value = (value - mean[:, None]) / std[:, None]
     nan_mask = torch.isnan(value)

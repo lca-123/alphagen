@@ -1,6 +1,4 @@
-from typing import List
-from alphagen.data.exception import InvalidExpressionException
-from alphagen.data.expression import BinaryOperator, Constant, DeltaTime, Expression, Feature, PairRollingOperator, RollingOperator, UnaryOperator
+from alphagen.data.expression import *
 from alphagen.data.tokens import *
 
 
@@ -31,8 +29,6 @@ class ExpressionBuilder:
             self.stack.append(DeltaTime(token.delta_time))
         elif isinstance(token, FeatureToken):
             self.stack.append(Feature(token.feature))
-        elif isinstance(token, ExpressionToken):
-            self.stack.append(token.expression)
         else:
             assert False
 
@@ -46,8 +42,8 @@ class ExpressionBuilder:
             return self.validate_dt()
         elif isinstance(token, ConstantToken):
             return self.validate_const()
-        elif isinstance(token, (FeatureToken, ExpressionToken)):
-            return self.validate_featured_expr()
+        elif isinstance(token, FeatureToken):
+            return self.validate_feature()
         else:
             assert False
 
@@ -84,5 +80,29 @@ class ExpressionBuilder:
     def validate_const(self) -> bool:
         return len(self.stack) == 0 or self.stack[-1].is_featured
 
-    def validate_featured_expr(self) -> bool:
+    def validate_feature(self) -> bool:
         return not (len(self.stack) >= 1 and isinstance(self.stack[-1], DeltaTime))
+
+
+class InvalidExpressionException(ValueError):
+    pass
+
+
+if __name__ == '__main__':
+    tokens = [
+        FeatureToken(FeatureType.LOW),
+        OperatorToken(Abs),
+        DeltaTimeToken(-10),
+        OperatorToken(Ref),
+        FeatureToken(FeatureType.HIGH),
+        FeatureToken(FeatureType.CLOSE),
+        OperatorToken(Div),
+        OperatorToken(Add),
+    ]
+
+    builder = ExpressionBuilder()
+    for token in tokens:
+        builder.add_token(token)
+
+    print(f'res: {str(builder.get_tree())}')
+    print(f'ref: Add(Ref(Abs($low),-10),Div($high,$close))')

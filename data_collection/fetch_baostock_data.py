@@ -1,16 +1,15 @@
+import pandas as pd
 import os
-import time
 import shutil
 import datetime
-import pandas as pd
 from pathlib import Path
 from tqdm import tqdm
-from typing import List, Optional, Callable
+from typing import List, Optional
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from contextlib import redirect_stdout
 
 import baostock as bs
 from baostock.data.resultset import ResultData
-from baostock_utils import baostock_login_context, baostock_relogin, baostock_login
 
 from qlib_dump_bin import DumpDataAll
 
@@ -50,11 +49,8 @@ class DataManager:
         save_path: str,
         qlib_export_path: str,
         qlib_base_data_path: Optional[str],
-        use_forward_adjust: bool = False,
-        adjust_date: Optional[str] = None,
-        max_workers: int = 40,
-        max_retries: int = 20,
-        retry_wait_seconds: float = 5.
+        forward_adjust_date: str = "2023-01-15",
+        max_workers: int = 10,
     ):
         self._save_path = os.path.expanduser(save_path)
         self._export_path = f"{self._save_path}/export"
@@ -64,12 +60,14 @@ class DataManager:
         self._qlib_path = qlib_base_data_path
         if self._qlib_path is not None:
             self._qlib_path = os.path.expanduser(self._qlib_path)
-        self._use_forward_adjust = use_forward_adjust
-        self._adjust_type: str = "foreAdjustFactor" if use_forward_adjust else "backAdjustFactor"
-        self._adjust_date = adjust_date
+        self._forward_adjust_date = forward_adjust_date
         self._max_workers = max_workers
-        self._max_retries = max_retries
-        self._retry_wait_seconds = retry_wait_seconds
+
+    @classmethod
+    def _login_baostock(cls) -> None:
+        with open(os.devnull, "w") as devnull:
+            with redirect_stdout(devnull):
+                bs.login()
 
     @property
     def _a_shares_list_path(self) -> str:
@@ -87,29 +85,27 @@ class DataManager:
 
     def _load_all_a_shares(self):
         print("Loading A-Shares stock list")
-        with baostock_login_context():
-            self._load_all_a_shares_base()
-            def query(): return bs.query_all_stock(day=str(datetime.date.today()))
-            stocks = {code for code in self._query_as_data_frame(query)["code"]
-                      if code.startswith("sh") or code.startswith("sz")}
-            self._all_a_shares += ["sh.000903", "sh.000300", "sh.000905", "sh.000852"]
-            self._all_a_shares = list(set(self._all_a_shares).union(stocks))
-            _write_all_text(self._a_shares_list_path,
-                            '\n'.join(str(s) for s in self._all_a_shares))
+        self._login_baostock()
+        self._load_all_a_shares_base()
+        qry = bs.query_all_stock(day=str(datetime.date.today()))
+        stocks = {code for code in self._result_to_data_frame(qry)["code"]
+                  if code.startswith("sh") or code.startswith("sz")}
+        self._all_a_shares += ["sh.000903", "sh.000300", "sh.000905", "sh.000852"]
+        self._all_a_shares = list(set(self._all_a_shares).union(stocks))
+        _write_all_text(self._a_shares_list_path,
+                        '\n'.join(str(s) for s in self._all_a_shares))
 
     def _parallel_foreach(
         self,
         callable,
         input: List[dict],
-        max_workers: Optional[int] = None,
-        need_to_login_baostock: bool = False
+        max_workers: Optional[int] = None
     ) -> list:
         if max_workers is None:
             max_workers = self._max_workers
         with tqdm(total=len(input)) as pbar:
             results = []
-            login = baostock_login if need_to_login_baostock else None
-            with ProcessPoolExecutor(max_workers, initializer=login) as executor:
+            with ProcessPoolExecutor(max_workers) as executor:
                 futures = [executor.submit(callable, **elem) for elem in input]
                 for f in as_completed(futures):
                     results.append(f.result())
@@ -117,14 +113,14 @@ class DataManager:
             return results
 
     def _fetch_basic_info_job(self, code: str) -> pd.DataFrame:
-        return self._query_as_data_frame(lambda: bs.query_stock_basic(code))
+        self._login_baostock()
+        return self._result_to_data_frame(bs.query_stock_basic(code))
 
     def _fetch_basic_info(self) -> pd.DataFrame:
         print("Fetching basic info")
         dfs = self._parallel_foreach(
             self._fetch_basic_info_job,
-            [dict(code=code) for code in self._all_a_shares],
-            need_to_login_baostock=True
+            [dict(code=code) for code in self._all_a_shares]
         )
         df = pd.concat(dfs)
         df = df.sort_values(by="code").drop_duplicates(subset="code").set_index("code")
@@ -132,7 +128,8 @@ class DataManager:
         return df
 
     def _fetch_adjust_factors_job(self, code: str, start: str) -> pd.DataFrame:
-        return self._query_as_data_frame(lambda: bs.query_adjust_factor(code, start))
+        self._login_baostock()
+        return self._result_to_data_frame(bs.query_adjust_factor(code, start))
 
     def _fetch_adjust_factors(self) -> pd.DataFrame:
         def one_year_before_ipo(ipo: str) -> str:
@@ -145,8 +142,7 @@ class DataManager:
         dfs: List[pd.DataFrame] = self._parallel_foreach(
             self._fetch_adjust_factors_job,
             [dict(code=code, start=one_year_before_ipo(data["ipoDate"]))
-             for code, data in self._basic_info.iterrows()],
-            need_to_login_baostock=True
+             for code, data in self._basic_info.iterrows()]
         )
         df = pd.concat([df for df in dfs if not df.empty])
         df = df.set_index(["code", "dividOperateDate"])
@@ -169,20 +165,13 @@ class DataManager:
         numeric_fields = self._fields.copy()
         numeric_fields.pop(0)
 
+        self._login_baostock()
+        query = bs.query_history_k_data_plus(
+            code, fields_str,
+            start_date=data["ipoDate"], adjustflag="2"
+        )
         adj = self._adjust_factors_for(code)
-
-        def query():
-            return bs.query_history_k_data_plus(
-                code, fields_str,
-                start_date=data["ipoDate"],
-                adjustflag=("2" if self._use_forward_adjust else "1")
-            )
-        res = self._query_as_data_frame(query)
-        try:
-            df = res.join(adj, on="date", how="left")
-        except:
-            print(f"{code = }\n{query = }\n{res = }")
-            exit(1)
+        df = self._result_to_data_frame(query).join(adj, on="date", how="left")
         df[self._adjust_columns] = df[self._adjust_columns].fillna(method="ffill").fillna(1.)
         df[numeric_fields] = df[numeric_fields].replace("", "0.").astype(float)
 
@@ -190,11 +179,10 @@ class DataManager:
             index: int = df.index.searchsorted(date, side="right") - 1   # type: ignore
             return df.iloc[index]
 
-        if self._adjust_date is not None:
-            ref_factor = as_of_date(df, self._adjust_date)[self._adjust_type]
-            readjust_fields = self._price_fields + [self._adjust_type]
-            df[readjust_fields] /= ref_factor
-        df["volume"] /= df[self._adjust_type]
+        ref_factor = as_of_date(df, self._forward_adjust_date)["foreAdjustFactor"]
+        readjust_fields = self._price_fields + ["foreAdjustFactor"]
+        df[readjust_fields] /= ref_factor
+        df["volume"] /= df["foreAdjustFactor"]
         df["vwap"] = df["amount"] / df["volume"]
         df = df.set_index("date")
         df.to_pickle(f"{self._save_path}/k_data/{code}.pkl")
@@ -205,15 +193,14 @@ class DataManager:
         self._parallel_foreach(
             self._download_stock_data_job,
             [dict(code=code, data=data)
-             for code, data in self._basic_info.iterrows()],
-            need_to_login_baostock=True
+             for code, data in self._basic_info.iterrows()]
         )
 
     def _save_csv_job(self, path: Path) -> None:
         code = path.stem
         code = f"{code[:2].upper()}{code[-6:]}"
         df: pd.DataFrame = pd.read_pickle(path)
-        df.rename(columns={self._adjust_type: "factor"}, inplace=True)
+        df.rename(columns={"foreAdjustFactor": "factor"}, inplace=True)
         df["code"] = code
         out = Path(self._export_path) / f"{code}.csv"
         df.to_csv(out)
@@ -226,23 +213,12 @@ class DataManager:
             [dict(path=path) for path in children]
         )
 
-    def _query_as_data_frame(self, query: Callable[[], ResultData]) -> pd.DataFrame:
-        retries = 0
-        while True:
-            rows = []
-            result = query()
-            while result.error_code == "0":
-                if not result.next():
-                    return pd.DataFrame(rows, columns=result.fields)
-                rows.append(result.get_row_data())
-            retries += 1
-            if retries > self._max_retries:
-                msg = (f"Retry attempts exceeds the limit of {self._max_retries}, "
-                       f"error code: {result.error_code}, error message: {result.error_msg}")
-                print(msg)
-                raise Exception(msg)
-            time.sleep(self._retry_wait_seconds)
-            baostock_relogin()
+    @classmethod
+    def _result_to_data_frame(cls, res: ResultData) -> pd.DataFrame:
+        lst = []
+        while res.error_code == "0" and res.next():
+            lst.append(res.get_row_data())
+        return pd.DataFrame(lst, columns=res.fields)
 
     def _dump_qlib_data(self) -> None:
         DumpDataAll(
@@ -254,6 +230,7 @@ class DataManager:
         ).dump()
         shutil.copy(f"{self._qlib_export_path}/calendars/day.txt",
                     f"{self._qlib_export_path}/calendars/day_future.txt")
+        self._fix_constituents()
 
     def _fix_constituents(self) -> None:
         today = str(datetime.date.today())
@@ -285,15 +262,15 @@ class DataManager:
         self._download_stock_data()
         self._save_csv()
         self._dump_qlib_data()
-        self._fix_constituents()
 
 
 if __name__ == "__main__":
+    today = str(datetime.date.today())
+    print(f"Forward adjust date: {today}")
     dm = DataManager(
-        save_path="../data",
-        qlib_export_path="~/.qlib/qlib_data/cn_data_2024h1",
+        save_path="~/.qlib/tmp",
+        qlib_export_path="~/.qlib/qlib_data/cn_data_rolling",
         qlib_base_data_path="~/.qlib/qlib_data/cn_data",
-        adjust_date="2009-01-01"
+        forward_adjust_date=today,
     )
     dm.fetch_and_save_data()
-    # dm._dump_qlib_data()
