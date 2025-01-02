@@ -15,7 +15,9 @@ class QLibStockDataCalculator(AlphaCalculator):
         if target is None: # Combination-only mode
             self.target_value = None
         else:
-            self.target_value = normalize_by_day(target.evaluate(self.data))
+            target = target.evaluate(self.data)
+            self.target_value = normalize_by_day(target)
+            # self.target_value = normalize_by_day(target.evaluate(self.data))
 
     def _calc_alpha(self, expr: Expression) -> Tensor:
         return normalize_by_day(expr.evaluate(self.data))

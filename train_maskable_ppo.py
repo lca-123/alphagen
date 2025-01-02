@@ -97,23 +97,25 @@ def main(
 ):
     reseed_everything(seed)
 
-    device = torch.device('cuda:0')
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     close = Feature(FeatureType.CLOSE)
     target = Ref(close, -20) / close - 1
 
     # You can re-implement AlphaCalculator instead of using QLibStockDataCalculator.
     data_train = StockData(instrument=instruments,
                            start_time='2010-01-01',
-                           end_time='2019-12-31')
+                           end_time='2017-12-31')
     data_valid = StockData(instrument=instruments,
-                           start_time='2020-01-01',
-                           end_time='2020-12-31')
+                           start_time='2018-01-01',
+                           end_time='2018-12-31')
     data_test = StockData(instrument=instruments,
-                          start_time='2021-01-01',
-                          end_time='2022-12-31')
+                          start_time='2019-01-01',
+                          end_time='2019-12-31')
     calculator_train = QLibStockDataCalculator(data_train, target)
     calculator_valid = QLibStockDataCalculator(data_valid, target)
     calculator_test = QLibStockDataCalculator(data_test, target)
+
+    exit()
 
     pool = AlphaPool(
         capacity=pool_capacity,
@@ -186,4 +188,5 @@ def fire_helper(
 
 
 if __name__ == '__main__':
-    fire.Fire(fire_helper)
+    main()
+    # fire.Fire(fire_helper)

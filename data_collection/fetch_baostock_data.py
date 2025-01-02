@@ -247,8 +247,8 @@ class DataManager:
 
     def fetch_and_save_data(
         self,
-        use_cached_basic_info: bool = False,
-        use_cached_adjust_factor: bool = False
+        use_cached_basic_info: bool = True,
+        use_cached_adjust_factor: bool = True
     ):
         self._load_all_a_shares()
         if use_cached_basic_info:
