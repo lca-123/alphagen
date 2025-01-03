@@ -60,6 +60,9 @@ class CustomCallback(BaseCallback):
         self.logger.record('test/rank_ic', rank_ic_test)
         self.save_checkpoint()
 
+    def _on_training_end(self) -> None:
+        self.show_pool_state()
+
     def save_checkpoint(self):
         path = os.path.join(self.save_path, f'{self.name_prefix}_{self.timestamp}', f'{self.num_timesteps}_steps')
         self.model.save(path)   # type: ignore
@@ -115,8 +118,6 @@ def main(
     calculator_valid = QLibStockDataCalculator(data_valid, target)
     calculator_test = QLibStockDataCalculator(data_test, target)
 
-    exit()
-
     pool = AlphaPool(
         capacity=pool_capacity,
         calculator=calculator_train,
@@ -129,9 +130,9 @@ def main(
     timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
 
     checkpoint_callback = CustomCallback(
-        save_freq=10000,
-        show_freq=10000,
-        save_path='/path/for/checkpoints',
+        save_freq=100,
+        show_freq=100,
+        save_path=f'/data2/private/lichang/alphagen/checkpoints/{name_prefix}',
         valid_calculator=calculator_valid,
         test_calculator=calculator_test,
         name_prefix=name_prefix,
@@ -154,7 +155,7 @@ def main(
         gamma=1.,
         ent_coef=0.01,
         batch_size=128,
-        tensorboard_log='/path/for/tb/log',
+        # tensorboard_log=f'./log/{name_prefix}',
         device=device,
         verbose=1,
     )
